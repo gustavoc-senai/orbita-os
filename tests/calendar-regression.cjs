@@ -1,0 +1,8 @@
+﻿const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),ts=require('typescript');
+const compiled=ts.transpileModule(fs.readFileSync('src/lib/calendar.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
+const sandbox={exports:{},Date};vm.runInNewContext(compiled,sandbox);const {monthDays,weekDays,eventsOnDay,positionEvents,localInput,dayKey}=sandbox.exports;
+assert.equal(monthDays(new Date(2024,1,14)).length,42);assert.equal(monthDays(new Date(2024,1,14)).filter(d=>d.getMonth()===1).length,29);assert.equal(weekDays(new Date(2026,10,12))[0].getDay(),0);
+const day=new Date(2026,10,12),event=(id,start,end)=>({id,title:id,starts_at:new Date(2026,10,12,start).toISOString(),ends_at:new Date(2026,10,12,end).toISOString(),assigned_to:null,notes:null});
+const events=[event('first',9,10),event('overlap',9,11),event('later',11,12)];assert.equal(eventsOnDay(events,day).length,3);const positioned=positionEvents(events,day);assert.equal(positioned[0].lanes,2);assert.notEqual(positioned[0].lane,positioned[1].lane);assert.equal(positioned[0].lane,positioned[2].lane);
+const midnight=event('night',23,24);assert.equal(eventsOnDay([midnight],new Date(2026,10,13)).length,0,'End midnight must not leak into next day');const across=event('across',23,26);assert.equal(eventsOnDay([across],new Date(2026,10,13)).length,1);assert.equal(positionEvents([across],new Date(2026,10,13))[0].top,0);
+const local=new Date(2026,10,12,9,30);assert.equal(localInput(local),'2026-11-12T09:30');assert.equal(dayKey(local),'2026-11-12');console.log('PASS: calendar month/leap year, week, overlapping events, midnight boundaries and local datetime');

@@ -1,0 +1,38 @@
+import {financialTotals} from '../lib/finance';
+﻿import {useState} from 'react';
+import {Link,Navigate} from 'react-router-dom';
+import {useQuery,useQueryClient} from '@tanstack/react-query';
+import {Activity,Building2,CheckCircle2,ClipboardList,FileText,LogOut,Moon,Sun,Wallet} from 'lucide-react';
+import {toast} from 'sonner';
+import {useAuth} from '../contexts/AuthContext';
+import {supabase} from '../lib/supabase';
+import {date,datetime,errMessage,money} from '../lib/format';
+import {useTheme} from '../lib/workspace';
+import {Badge,Button,Empty,Loading,PageHeader,StatCard} from '../components/UI';
+type Row=Record<string,any>;
+export default function CustomerPortal(){
+ const {user,loading,signOut}=useAuth(),{theme,setTheme}=useTheme(),qc=useQueryClient();
+ const [current,setCurrent]=useState(''),[tab,setTab]=useState('orders'),[responding,setResponding]=useState<string|null>(null);
+ const links=useQuery({queryKey:['customer-access',user?.id],enabled:!!user,queryFn:async()=>{const {data,error}=await supabase.from('customer_users').select('organization_id,customer_id,customers(name),organizations(name)').eq('user_id',user!.id);if(error)throw error;return (data||[]) as Row[]}});
+ const linked=links.data?.find(x=>`${x.organization_id}:${x.customer_id}`===current)||links.data?.[0];
+ const records=useQuery({queryKey:['portal-records',user?.id,linked?.organization_id,linked?.customer_id],enabled:!!linked&&!!user,queryFn:async()=>{
+  const entries=await Promise.all(['work_orders','quotes','invoices'].map(async table=>{const {data,error}=await supabase.from(table).select('*').eq('organization_id',linked!.organization_id).eq('customer_id',linked!.customer_id).order('created_at',{ascending:false}).limit(1000);if(error)throw error;return [table,data||[]] as const}));return Object.fromEntries(entries) as Record<string,Row[]>;
+ }});
+ const respond=async(q:Row,decision:'APPROVED'|'REJECTED')=>{if(!window.confirm(`${decision==='APPROVED'?'Aprovar':'Recusar'} o orçamento ${q.title}?`))return;setResponding(q.id);try{const {error}=await supabase.rpc('respond_to_quote',{p_quote:q.id,p_decision:decision,p_note:null});if(error)throw error;toast.success(decision==='APPROVED'?'Proposta aprovada':'Proposta recusada');await qc.invalidateQueries({queryKey:['portal-records']})}catch(e){toast.error(errMessage(e))}finally{setResponding(null)}};
+ if(loading)return <Loading/>;if(!user)return <Navigate to="/login" replace/>;
+ const orders=records.data?.work_orders||[],quotes=records.data?.quotes||[],invoices=records.data?.invoices||[];
+ const related=(value:any)=>Array.isArray(value)?value[0]?.name:value?.name;
+ const error=links.error||records.error;
+ return <div className="portal-shell"><header className="portal-nav"><div className="brand-row"><span className="brand-mark"><Activity size={22}/></span><div className="brand-title"><b>órbita<span>os</span></b><small>PORTAL DO CLIENTE</small></div></div><span>{user.email}</span><button className="topbar-icon" aria-label="Alternar tema" onClick={()=>setTheme(theme==='dark'?'light':'dark')}>{theme==='dark'?<Sun size={18}/>:<Moon size={18}/>}</button><Button variant="outline" onClick={()=>void signOut()}><LogOut size={15}/>Sair</Button></header>
+ <main className="portal-content"><PageHeader eyebrow="SEU ESPAÇO DE ATENDIMENTO" title={`Olá, ${(user.user_metadata?.full_name||'cliente').split(' ')[0]}.`} description="Seus serviços, propostas e pagamentos. Tudo por aqui."/>
+ {links.isLoading||records.isLoading?<Loading/>:error?<div className="module-error" role="alert"><h2>Não foi possível carregar seus serviços</h2><p>{errMessage(error)}</p><Button onClick={()=>{void links.refetch();void records.refetch()}}>Tentar novamente</Button></div>:!linked?<Empty title="Seu espaço está quase pronto" description="Peça à empresa prestadora para vincular seu e-mail confirmado ao cadastro de cliente."/>:<>
+ <div className="portal-client-name"><Building2 size={20}/><div><strong>{related(linked.organizations)||'Empresa prestadora'}</strong><p style={{margin:'5px 0 0',fontSize:10,color:'var(--od-muted)'}}>Atendimento para {related(linked.customers)||'seu cadastro'}</p></div></div>
+ {(links.data?.length||0)>1&&<label className="field"><span>Empresa e cadastro vinculados</span><select value={`${linked.organization_id}:${linked.customer_id}`} onChange={e=>setCurrent(e.target.value)}>{links.data!.map(x=><option key={`${x.organization_id}:${x.customer_id}`} value={`${x.organization_id}:${x.customer_id}`}>{related(x.organizations)} · {related(x.customers)}</option>)}</select></label>}
+ <div className="stat-grid"><StatCard title="Serviços em andamento" value={String(orders.filter(o=>!['DONE','CANCELED'].includes(o.status)).length)} icon={<ClipboardList size={18}/>} delta="Acompanhamento de atendimento"/><StatCard title="Propostas para avaliar" value={String(quotes.filter(q=>q.status==='SENT').length)} icon={<FileText size={18}/>} delta="Consulte as condições abaixo"/><StatCard title="Saldo a pagar" value={money(financialTotals(invoices,[]).pending)} icon={<Wallet size={18}/>} delta="Valores registrados pela empresa"/><StatCard title="Serviços concluídos" value={String(orders.filter(o=>o.status==='DONE').length)} icon={<CheckCircle2 size={18}/>} delta="Seu histórico de atendimento"/></div>
+ <nav className="portal-tabs" aria-label="Seções do portal">{[{id:'orders',title:'Atendimentos',icon:ClipboardList},{id:'quotes',title:'Propostas',icon:FileText},{id:'invoices',title:'Faturas',icon:Wallet}].map(t=><button key={t.id} className={tab===t.id?'selected':''} aria-pressed={tab===t.id} onClick={()=>setTab(t.id)}><t.icon size={18}/>{t.title}</button>)}</nav>
+ {tab==='orders'&&(orders.length?orders.map(o=><article className="portal-service-card" key={o.id}><div><h3>{o.title}</h3><p>Atendimento #{String(o.number).padStart(5,'0')} · {date(o.created_at)}</p>{o.scheduled_at&&<p>Agendado para {datetime(o.scheduled_at)}</p>}{o.description&&<p>{o.description}</p>}{o.status!=='CANCELED'&&<div className="portal-progress" aria-label={`Etapa: ${o.status}`} >{['OPEN','SCHEDULED','IN_PROGRESS','DONE'].map((s,i)=><i key={s} className={i<=['OPEN','SCHEDULED','IN_PROGRESS','DONE'].indexOf(o.status)?'done':''}/>)}</div>}</div><Badge value={o.status}/></article>):<Empty title="Nenhum atendimento por enquanto" description="Seus serviços aparecerão aqui assim que a empresa registrar um atendimento."/>)}
+ {tab==='quotes'&&(quotes.length?quotes.map(q=><article className="portal-service-card" key={q.id}><div><h3>{q.title}</h3><p>Proposta #{q.number} · {money(q.total)}</p>{q.valid_until&&<p>Validade: {date(q.valid_until)}</p>}{q.notes&&<p>{q.notes}</p>}</div><div className="portal-card-actions"><Badge value={q.status}/>{q.status==='SENT'&&(!q.valid_until||q.valid_until>=new Date().toLocaleDateString('sv-SE'))&&<><Button disabled={responding===q.id} onClick={()=>void respond(q,'APPROVED')}>{responding===q.id?'Processando...':'Aprovar proposta'}</Button><Button variant="outline" disabled={responding===q.id} onClick={()=>void respond(q,'REJECTED')}>Recusar</Button></>}</div></article>):<Empty title="Nenhuma proposta disponível" description="Você poderá consultar e responder às propostas enviadas pela empresa."/>)}
+ {tab==='invoices'&&(invoices.length?invoices.map(i=><article className="portal-service-card" key={i.id}><div><h3>{i.title}</h3><p>Total: {money(i.amount)} · Pago: {money(i.paid_amount)}</p><p>Vencimento: {date(i.due_date)}</p></div><Badge value={i.status}/></article>):<Empty title="Nenhuma fatura disponível" description="As cobranças da empresa e seus pagamentos registrados aparecerão aqui."/>)}
+ </>}
+ </main></div>
+}

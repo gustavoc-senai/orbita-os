@@ -1,0 +1,14 @@
+const fs=require('node:fs');const path=require('node:path');const assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'..');const read=f=>fs.readFileSync(path.join(root,f),'utf8');
+const app=read('src/App.tsx'),ctx=read('src/contexts/AuthContext.tsx'),setup=read('src/pages/AuthPages.tsx');
+const migrations=fs.readdirSync(path.join(root,'supabase/migrations')).filter(x=>x.endsWith('.sql')).sort();
+assert.equal(migrations.length,22,'Esperadas 22 migrations');
+for(let i=1;i<=22;i++)assert(migrations[i-1].startsWith(String(i).padStart(3,'0')+'_'),'Ordem de migrations inválida');
+for(const route of ['/setup','/portal','/convite','central-operacional','central-comercial','central-financeira','gestao-pessoas','auditoria'])assert(app.includes(route),'Rota ausente '+route);
+for(const value of ['create_organization','errMessage(e)','navigate(\'/app\''])assert(setup.includes(value),'Elemento de setup ausente: '+value);
+assert(ctx.includes('organization_members'),'Sem tabela de associação multiempresa');
+const all=fs.readdirSync(path.join(root,'src/pages/domains')).filter(x=>x.endsWith('.tsx'));
+assert(all.length>=24,'Módulos anteriores não preservados');
+assert(read('supabase/migrations/017_team_profile_relationship.sql').includes('foreign key(user_id) references public.profiles'));
+const paths=['src/pages/BusinessCenters.tsx','src/pages/ModulesHub.tsx','src/pages/WorkerHome.tsx'];for(const path of paths)assert(fs.existsSync(require('node:path').join(root,path)));
+console.log(`OK: ${migrations.length} migrations, ${all.length} páginas de domínio, 5 centrais adicionais, rotas essenciais presentes`);

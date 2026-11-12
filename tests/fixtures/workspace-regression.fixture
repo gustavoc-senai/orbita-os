@@ -1,0 +1,86 @@
+-- SOMENTE TESTE LOCAL EM DOCKER. NÃO EXECUTAR NO SUPABASE.
+-- Integration regression test. Run only against the disposable database created by validate-sql.cjs.
+begin;
+insert into auth.users(id,email,email_confirmed_at,raw_user_meta_data) values
+ ('10000000-0000-0000-0000-000000000001','owner-a@example.test',now(),'{"full_name":"Owner A"}'),
+ ('10000000-0000-0000-0000-000000000002','owner-b@example.test',now(),'{"full_name":"Owner B"}'),
+ ('10000000-0000-0000-0000-000000000003','worker@example.test',now(),'{"full_name":"Worker"}'),
+ ('10000000-0000-0000-0000-000000000004','colleague@example.test',now(),'{"full_name":"Colleague"}');
+set local role authenticated;
+select set_config('request.jwt.claim.sub','10000000-0000-0000-0000-000000000001',true);
+select public.create_organization('TechHigh','TECHNOLOGY') as org_a \gset
+insert into public.customers(organization_id,name) values(:'org_a','Cliente A');
+select public.create_team_invite(:'org_a','worker@example.test','TECHNICIAN') as invite \gset
+select set_config('request.jwt.claim.sub','10000000-0000-0000-0000-000000000002',true);
+select public.create_organization('Empresa B','GENERAL') as org_b \gset
+insert into public.customers(organization_id,name) values(:'org_b','Cliente B');
+do $$begin
+ if (select count(*) from public.organizations)<>1 then raise exception 'Empresa de outro tenant exposta';end if;
+ if (select count(*) from public.customers)<>1 then raise exception 'Clientes de outro tenant expostos';end if;
+ if exists(select 1 from public.customers where name='Cliente A') then raise exception 'Isolamento de clientes falhou';end if;
+ begin
+  perform public.create_organization(' ','TECHNOLOGY');
+  raise exception 'Nome inválido foi aceito';
+ exception when invalid_parameter_value then null;end;
+ begin
+  perform public.create_organization('Empresa','INVALID');
+  raise exception 'Segmento inválido foi aceito';
+ exception when invalid_parameter_value then null;end;
+end$$;
+select set_config('request.jwt.claim.sub','10000000-0000-0000-0000-000000000003',true);
+select public.accept_org_invitation(:'invite') as accepted \gset
+select :'accepted' = :'org_a' as correct_invite_org \gset
+\if :correct_invite_org
+\else
+ \quit 1
+\endif
+do $$begin
+ if not exists(select 1 from public.organization_members where user_id=auth.uid() and role='TECHNICIAN' and status='ACTIVE') then raise exception 'Aceite de convite não vinculou o funcionário';end if;
+ if exists(select 1 from public.customers where name='Cliente B') then raise exception 'Convite rompeu isolamento';end if;
+end$$;
+-- Chat visibility, sender identity, recipient tenant, assistant quota.
+insert into public.company_messages(organization_id,sender_id,body) values(:'org_a',auth.uid(),'Mensagem geral');
+insert into public.company_messages(organization_id,sender_id,recipient_id,body) values(:'org_a',auth.uid(),'10000000-0000-0000-0000-000000000001','Mensagem privada');
+select set_config('request.jwt.claim.sub','10000000-0000-0000-0000-000000000001',true);
+select public.create_team_invite(:'org_a','colleague@example.test','TECHNICIAN') as colleague_invite \gset
+select set_config('request.jwt.claim.sub','10000000-0000-0000-0000-000000000004',true);
+select public.accept_org_invitation(:'colleague_invite');
+select set_config('test.org_a',:'org_a',true);
+do $$declare v_org uuid;begin
+ v_org:=current_setting('test.org_a')::uuid;
+ if (select count(*) from public.company_messages)<>1 then raise exception 'Conversa privada exposta a outro colega';end if;
+ begin
+  insert into public.company_messages(organization_id,sender_id,body) values(v_org,'10000000-0000-0000-0000-000000000001','Falsa autoria');
+  raise exception 'Falsa autoria aceita';
+ exception when insufficient_privilege then null;end;
+ begin
+  insert into public.company_messages(organization_id,sender_id,recipient_id,body) values(v_org,auth.uid(),'10000000-0000-0000-0000-000000000002','Outro tenant');
+  raise exception 'Destinatário externo aceito';
+ exception when insufficient_privilege then null;end;
+ for i in 1..30 loop
+  if not public.reserve_assistant_request(v_org) then raise exception 'Quota bloqueada antes do limite';end if;
+ end loop;
+ if public.reserve_assistant_request(v_org) then raise exception 'Quota de IA não aplicada';end if;
+end$$;
+select set_config('request.jwt.claim.sub','10000000-0000-0000-0000-000000000002',true);
+do $$begin
+ if exists(select 1 from public.company_messages) then raise exception 'Chat de outra empresa exposto';end if;
+ begin
+  perform public.reserve_assistant_request(current_setting('test.org_a')::uuid);
+  raise exception 'Quota de outra empresa aceita';
+ exception when insufficient_privilege then null;end;
+end$$;
+select set_config('request.jwt.claim.sub','',true);
+do $$begin
+ begin
+  perform public.create_organization('Anônimo','GENERAL');
+  raise exception 'Criação sem sessão foi aceita';
+ exception when invalid_authorization_specification then null;end;
+end$$;
+reset role;
+do $$begin
+ if (select count(*) from public.organizations where name='TechHigh')<>1 then raise exception 'Cadastro duplicado';end if;
+ if not exists(select 1 from public.organization_members m join public.organizations o on o.id=m.organization_id where o.name='TechHigh' and m.role='OWNER' and m.status='ACTIVE') then raise exception 'Proprietário ausente';end if;
+end$$;
+rollback;
+\echo 'PASS: empresas, convites, isolamento, chat privado, autoria, destinatários e limite de IA'

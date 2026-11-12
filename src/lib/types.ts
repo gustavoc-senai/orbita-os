@@ -1,0 +1,15 @@
+export type Role = 'OWNER'|'ADMIN'|'MANAGER'|'DISPATCHER'|'TECHNICIAN'|'FINANCE'|'CLIENT';
+export type Org = { id:string; name:string; slug:string; industry:string; email:string|null; phone:string|null; created_at:string; settings?:Record<string,unknown> };
+export type Member = {organization_id:string; user_id:string; role:Role; status:string; profiles?:{ full_name:string|null; email:string|null }|null};
+export type Customer = {id:string; organization_id:string; name:string; type:'PERSON'|'COMPANY'; email:string|null; phone:string|null; tax_id:string|null; notes:string|null; created_at:string};
+export type Site = {id:string; organization_id:string; customer_id:string; name:string; address:string|null; city:string|null; state:string|null; created_at:string};
+export type Asset = {id:string; organization_id:string; customer_id:string|null; site_id:string|null; name:string; serial_number:string|null; category:string|null; model:string|null; status:string; created_at:string};
+export type Service = {id:string; organization_id:string; name:string; description:string|null; price:number; duration_minutes:number; active:boolean; created_at:string};
+export type WorkOrder = {id:string; organization_id:string; number:number; customer_id:string; site_id:string|null; asset_id:string|null; title:string; description:string|null; status:string; priority:string; scheduled_at:string|null; due_at:string|null; assigned_to:string|null; estimated_amount:number; completed_at:string|null; created_at:string};
+export type Quote = {id:string; organization_id:string; number:number; customer_id:string; title:string; status:string; total:number; valid_until:string|null; notes:string|null; created_at:string};
+export type Invoice = {id:string; organization_id:string; number:number; customer_id:string; work_order_id:string|null; title:string; amount:number; paid_amount:number; status:string; due_date:string|null; created_at:string};
+export type Contract = {id:string; organization_id:string; customer_id:string; title:string; status:string; amount:number; billing_cycle:string; starts_on:string; ends_on:string|null; next_service_on:string|null; created_at:string};
+export type InventoryItem = {id:string; organization_id:string; sku:string|null; name:string; unit:string; cost:number; sale_price:number; quantity:number; min_quantity:number; created_at:string};
+export type CalendarEvent = {id:string; organization_id:string; title:string; starts_at:string; ends_at:string; work_order_id:string|null; assigned_to:string|null; notes:string|null; created_at:string};
+export type Expense = {id:string; organization_id:string; title:string; category:string|null; amount:number; incurred_on:string; status:string; created_at:string};
+export type Notification = {id:string; organization_id:string; user_id:string; title:string; body:string|null; read_at:string|null; created_at:string};

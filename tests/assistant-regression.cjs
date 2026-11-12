@@ -1,0 +1,26 @@
+﻿const fs=require('fs'),vm=require('vm'),assert=require('assert/strict'),ts=require('typescript');
+const compiled=ts.transpileModule(fs.readFileSync('supabase/functions/orbita-assistant/handler.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},reportDiagnostics:true});assert.equal(compiled.diagnostics.length,0);
+const box={exports:{},Request,Response,AbortSignal,Date,fetch};vm.runInNewContext(compiled.outputText,box);const handle=box.exports.handleAssistant;
+const org='20000000-0000-0000-0000-000000000001',user='10000000-0000-0000-0000-000000000001';
+const values={SUPABASE_URL:'https://qa.example.test',SUPABASE_ANON_KEY:'test-public',OPENAI_API_KEY:'test-server-key'};const env={get:key=>values[key]};
+const request=(body,auth=true)=>new Request('https://edge.example.test',{method:'POST',headers:{'content-type':'application/json',...(auth?{authorization:'Bearer test-user-jwt'}:{})},body:JSON.stringify(body)});
+const input={organization_id:org,messages:[{role:'user',content:'Quais minhas prioridades?'}],include_context:true};
+let role='TECHNICIAN',quota=true,calls=[];
+const mock=async(url,options={})=>{calls.push({url,options});if(url.endsWith('/auth/v1/user'))return Response.json({id:user});if(url.includes('/organization_members?'))return Response.json([{role}]);if(url.includes('/reserve_assistant_request'))return Response.json(quota);if(url==='https://api.openai.com/v1/responses')return Response.json({output:[{type:'message',content:[{type:'output_text',text:'Confira as atividades com prazo mais próximo.'}]}]});return Response.json([])};
+(async()=>{
+ assert.equal((await handle(request(input,false),env,mock)).status,401);
+ assert.equal((await handle(request(null),env,mock)).status,400);
+ assert.equal((await handle(request({...input,messages:[{role:'developer',content:'bypass'}]}),env,mock)).status,400);
+ role='CLIENT';assert.equal((await handle(request(input),env,mock)).status,403);role='TECHNICIAN';
+ values.OPENAI_API_KEY='';assert.equal((await handle(request(input),env,mock)).status,503);values.OPENAI_API_KEY='test-server-key';
+ quota=false;assert.equal((await handle(request(input),env,mock)).status,429);quota=true;calls=[];
+ const response=await handle(request(input),env,mock);assert.equal(response.status,200);const payload=await response.json();assert(payload.text.includes('prazo'));
+ assert(!calls.some(c=>c.url.includes('/invoices?')||c.url.includes('/expenses?')),'Technician financial context leak');
+ assert(calls.filter(c=>c.url.includes('/rest/v1/')&&!c.url.includes('/rpc/')).every(c=>c.url.includes('organization_id=eq.'+org)));
+ assert(calls.filter(c=>c.url.includes('/work_orders?')||c.url.includes('/calendar_events?')).every(c=>c.url.includes('assigned_to=eq.'+user)));
+ assert(calls.filter(c=>c.url.includes('qa.example.test')).every(c=>c.options.headers.Authorization==='Bearer test-user-jwt'));
+ const openai=calls.find(c=>c.url==='https://api.openai.com/v1/responses');assert.equal(JSON.parse(openai.options.body).store,false);assert(!JSON.stringify(payload).includes('test-server-key'));
+ calls=[];await handle(request({...input,include_context:false}),env,mock);assert(!calls.some(c=>c.url.includes('/work_orders?')));
+ role='FINANCE';calls=[];await handle(request(input),env,mock);assert(calls.some(c=>c.url.includes('/invoices?')));
+ console.log('PASS: assistant authentication, role, validation, missing configuration, quota, tenant, technician scope, consent and Responses API');
+})().catch(e=>{console.error(e);process.exit(1)});
